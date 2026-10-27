@@ -17,6 +17,13 @@ FastAPI + Redis. The app is deliberately small; the point is everything around i
 | `GET /metrics` | Prometheus metrics (request count/latency per route, links created, redirects) |
 
 ### Run locally
+**With Docker (app + Redis, one command):**
+```bash
+docker compose up --build        # http://localhost:8000/docs
+docker compose down              # stop (links persist in the redis-data volume; add -v to wipe)
+```
+
+**Without Docker (for development):**
 ```bash
 uv sync --extra dev                                    # create .venv and install deps
 uv run pytest                                          # tests (use fakeredis, no Redis needed)
@@ -28,7 +35,7 @@ Config: `REDIS_URL` (default `redis://localhost:6379/0`).
 ## Progress
 - [x] Phase 0 — workstation setup (OrbStack, kubectl, k3d, Helm, Terraform)
 - [x] Phase 1 — the app + tests, CI via a central reusable pipeline
-- [ ] Phase 2 — containers (multi-stage Dockerfile, docker-compose)
+- [x] Phase 2 — containers: multi-stage, non-root, multi-arch image + docker-compose
 - [ ] Phase 3 — CI: build, scan (Trivy), push image to GHCR
 - [ ] Phase 4 — Kubernetes (k3d): raw manifests, then Helm
 - [ ] Phase 5 — GitOps with Argo CD

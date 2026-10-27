@@ -125,3 +125,78 @@ happens in docker-compose (Phase 2).
 **Q: What is 12-factor config?**
 Store config in the environment, not in code. The same build artifact is promoted through
 dev → staging → prod, and only env vars change.
+
+---
+
+## Phase 2 — Containers
+
+**What:** a multi-stage `Dockerfile` (non-root, health check, builds for arm64 + amd64), a
+`.dockerignore`, and a `docker-compose.yml` that runs the app with a real Redis.
+
+### How the Dockerfile works
+```
+Stage 1 "builder"  python:3.12-slim + uv → installs dependencies into /app/.venv
+Stage 2 (runtime)  python:3.12-slim      → copies ONLY /app/.venv, adds a non-root user, runs uvicorn
+```
+The builder's tools (uv, caches, build backend) never reach the final image.
+
+| Decision | Why |
+|---|---|
+| Multi-stage build | Final image has no build tools: smaller, fewer CVEs, less attack surface. |
+| Copy `pyproject.toml` + `uv.lock` before the code | Docker caches each layer. Dependencies only reinstall when the lock file changes; a code edit rebuilds in seconds. |
+| `uv sync --frozen` | Install exactly what's in `uv.lock`, fail if it's out of date → reproducible builds. |
+| `USER 10001` (non-root, numeric UID) | If the app is compromised, the attacker isn't root in the container. A numeric UID lets Kubernetes verify `runAsNonRoot`. |
+| `HEALTHCHECK` | `docker ps` / Compose show `healthy`; Compose can wait on it. (Kubernetes ignores it and uses its own probes.) |
+| `.dockerignore` | Keeps `.git`, `.venv`, tests and any `.env` out of the build context and the image. |
+| `PYTHONUNBUFFERED=1` | Logs go straight to stdout, so `docker logs` / `kubectl logs` show them immediately. |
+| Pinned base/tool versions | `uv:0.13.6`, `python:3.12-slim`, `redis:7-alpine` — builds don't change under you. |
+
+### docker-compose
+- `REDIS_URL=redis://redis:6379/0` — Compose creates a private network with DNS, so the service name
+  `redis` resolves to the Redis container.
+- `depends_on: condition: service_healthy` — the app starts only once Redis answers `PING`.
+- Redis has **no published port**: only containers on the Compose network can reach it.
+- Named volume `redis-data` + `--appendonly yes` → links survive `docker compose down` (verified).
+
+### Results
+| | |
+|---|---|
+| Final image | 269 MB (builder stage: 325 MB). Most of it is the Python base image itself. |
+| Runs as | `uid=10001(app)` |
+| Platforms | `linux/arm64` and `linux/amd64` (amd64 tested on the Mac via emulation) |
+
+### Commands
+```bash
+docker build -t devops-lab/shortener:dev .
+docker compose up -d --build --wait && docker compose ps
+docker compose exec app id                      # prove it's not root
+docker buildx build --platform linux/amd64,linux/arm64 -t devops-lab/shortener:multi --load .
+docker compose down        # keep data      |   docker compose down -v   # also delete the volume
+```
+
+### Gotchas
+- `--platform linux/amd64` on Apple Silicon runs through emulation (Rosetta/QEMU) — fine for testing,
+  slower for heavy builds. CI builds natively on amd64 runners.
+- `depends_on` without `condition: service_healthy` only waits for the container to *start*, not for
+  Redis to be ready.
+
+### Interview questions
+**Q: Why multi-stage builds?**
+Build tools and caches stay in the builder stage; the runtime stage copies only the artifacts. Smaller
+images pull faster, start faster and contain fewer packages that can have vulnerabilities.
+
+**Q: How do you make Docker builds fast?**
+Order layers from least to most frequently changing — dependency manifests before source code — so the
+expensive install layer is cached. Use BuildKit cache mounts and a `.dockerignore`.
+
+**Q: Why not run containers as root?**
+Container root is the host's UID 0 unless user namespaces are used; a container escape or a mounted
+host path then gives root-level access. Non-root is cheap defence in depth, and many clusters enforce it.
+
+**Q: What does a multi-arch image mean?**
+One tag points to a manifest list with an image per CPU architecture. `docker pull` picks the one
+matching the machine, so the same tag works on an arm64 Mac and an amd64 server.
+
+**Q: Volume vs bind mount?**
+A named volume is managed by Docker (good for database data). A bind mount maps a host folder into the
+container (good for live-editing code in development).
