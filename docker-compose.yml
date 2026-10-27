@@ -1,0 +1,28 @@
+# Local dev stack: app + Redis.   docker compose up --build   →   http://localhost:8000/docs
+services:
+  app:
+    build: .
+    image: devops-lab/shortener:dev
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_URL: redis://redis:6379/0   # "redis" = the service name below; Compose provides DNS for it
+    depends_on:
+      redis:
+        condition: service_healthy      # start the app only once Redis answers PING
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]   # write every change to disk (AOF)
+    volumes:
+      - redis-data:/data                # named volume: links survive `docker compose down`
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    # no "ports:" on purpose — only the app can reach Redis, over the private Compose network
+
+volumes:
+  redis-data:
