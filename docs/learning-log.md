@@ -200,3 +200,66 @@ matching the machine, so the same tag works on an arm64 Mac and an amd64 server.
 **Q: Volume vs bind mount?**
 A named volume is managed by Docker (good for database data). A bind mount maps a host folder into the
 container (good for live-editing code in development).
+
+---
+
+## Phase 3 — CI for the container image
+
+**What:** `.github/workflows/image.yml`, next to the shared checks from ido-pipeline (`pipeline.yml`).
+
+```
+pull request ─► build (amd64) ─► Trivy scan ─► smoke test (/health)          nothing pushed
+push to main ─► same checks ─► build amd64+arm64 ─► push ghcr.io/ido-devops/devops-lab:{sha-xxxxxxx, main}
+tag v1.2.3   ─► same checks ─► build amd64+arm64 ─► push :1.2.3 :1.2 :latest :sha-xxxxxxx
+```
+
+### Design decisions
+| Decision | Why |
+|---|---|
+| Scan **before** publishing (`needs: build-and-scan`) | A vulnerable or broken image never reaches the registry. |
+| Trivy: HIGH/CRITICAL, `--ignore-unfixed` | Fail only on problems you can act on. Unfixed CVEs would block every build with nothing to do. |
+| Smoke test the built image | Unit tests prove the code; this proves the *container* starts (entrypoint, user, deps). |
+| Tag `sha-<commit>` | Immutable and traceable: any running pod maps to an exact commit. Deploys (Phase 5) use it. |
+| `main` and `latest` tags | Convenience only — they move, so never deploy by them. |
+| Semver tags from git tags | `git tag v1.0.0 && git push --tags` produces a release image. |
+| `GITHUB_TOKEN` with `packages: write` | Short-lived, auto-created per run; no personal token stored as a secret. |
+| Least-privilege `permissions` | Workflow default is `contents: read`; only the publish job gets `packages: write`. |
+| Actions pinned to commit SHAs | A tag like `@v4` can be re-pointed if an action's repo is compromised (this has happened — e.g. the 2025 `tj-actions/changed-files` incident). A SHA can't change. Dependabot bumps the SHAs. |
+| Trivy run as a pinned Docker image, not a wrapper action | One less third-party dependency in the supply chain. |
+| `cache-from/to: type=gha` | BuildKit layer cache stored in GitHub Actions cache → much faster rebuilds. |
+| PRs build amd64 only; publish builds both | Fast feedback on PRs; arm64 via QEMU emulation is slow, so only pay for it when publishing. |
+| `concurrency: cancel-in-progress` | A new push to the same branch cancels the outdated run. |
+
+### Commands
+```bash
+trivy image --severity HIGH,CRITICAL --ignore-unfixed --scanners vuln devops-lab/shortener:dev   # same as CI
+docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:latest      # lint workflow files
+docker pull ghcr.io/ido-devops/devops-lab:main
+```
+
+### Gotchas
+- **Registry names must be lowercase.** The GitHub owner is `ido-DevOps`, the image is
+  `ghcr.io/ido-devops/...`. `docker/metadata-action` lower-cases it.
+- **A new GHCR package is private by default**, even from a public repo. Make it public once in the
+  package settings, or pulls without login fail.
+- actionlint runs ShellCheck on `run:` blocks — quote variables (`"${VAR}"`).
+
+### Interview questions
+**Q: How do you tag images, and which tag do you deploy?**
+Every build gets an immutable tag tied to the commit (`sha-abc1234`); releases also get semver tags.
+Deploy by the immutable tag (or digest), never by `latest`: `latest` changes under you, so you can't
+tell what's running and rollbacks are unreliable.
+
+**Q: What does Trivy do?**
+It inventories an image's OS packages and language dependencies, matches them against vulnerability
+databases (CVEs), and reports severity and fixed versions. In CI it's a gate: the build fails on
+fixable HIGH/CRITICAL findings, so they're fixed before the image is published.
+
+**Q: How do you secure a CI pipeline?**
+Least-privilege token permissions per job, short-lived tokens (`GITHUB_TOKEN`/OIDC) instead of stored
+secrets, actions pinned to SHAs, secret scanning, dependency and image scanning, and branch protection
+so nothing reaches `main` without passing checks.
+
+**Q: Image tag vs digest?**
+A tag is a movable name; a digest (`@sha256:...`) is the content hash and can never change. For the
+strongest guarantee, deploy by digest.

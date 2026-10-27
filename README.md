@@ -1,5 +1,8 @@
 # DevOps Lab
 
+[![pipeline](https://github.com/ido-DevOps/devops-lab/actions/workflows/pipeline.yml/badge.svg)](https://github.com/ido-DevOps/devops-lab/actions/workflows/pipeline.yml)
+[![image](https://github.com/ido-DevOps/devops-lab/actions/workflows/image.yml/badge.svg)](https://github.com/ido-DevOps/devops-lab/actions/workflows/image.yml)
+
 A hands-on DevOps portfolio project that runs entirely on a laptop: a small service taken from
 code → container → CI → Kubernetes → GitOps → observability → infrastructure as code.
 
@@ -15,6 +18,12 @@ FastAPI + Redis. The app is deliberately small; the point is everything around i
 | `GET /health` | liveness: the process is up |
 | `GET /ready` | readiness: Redis is reachable (503 if not) |
 | `GET /metrics` | Prometheus metrics (request count/latency per route, links created, redirects) |
+
+### Container image
+```bash
+docker pull ghcr.io/ido-devops/devops-lab:main     # latest main build (amd64 + arm64)
+```
+Tags: `sha-<commit>` (immutable, used for deploys), `main`, and `X.Y.Z` / `X.Y` / `latest` for releases.
 
 ### Run locally
 **With Docker (app + Redis, one command):**
@@ -36,7 +45,7 @@ Config: `REDIS_URL` (default `redis://localhost:6379/0`).
 - [x] Phase 0 — workstation setup (OrbStack, kubectl, k3d, Helm, Terraform)
 - [x] Phase 1 — the app + tests, CI via a central reusable pipeline
 - [x] Phase 2 — containers: multi-stage, non-root, multi-arch image + docker-compose
-- [ ] Phase 3 — CI: build, scan (Trivy), push image to GHCR
+- [x] Phase 3 — CI: build, Trivy scan, smoke test, multi-arch push to GHCR
 - [ ] Phase 4 — Kubernetes (k3d): raw manifests, then Helm
 - [ ] Phase 5 — GitOps with Argo CD
 - [ ] Phase 6 — Observability: Prometheus + Grafana
